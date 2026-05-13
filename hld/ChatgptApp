@@ -1,0 +1,675 @@
+A good SDE-2 system design answer for “How do ChatGPT-like apps work?” should cover:
+
+1. High-level architecture
+2. Request lifecycle
+3. LLM inference pipeline
+4. Scalability and performance
+5. Data storage and retrieval
+6. Streaming responses
+7. Safety + moderation
+8. Reliability + observability
+9. Tradeoffs and follow-up questions
+
+You should explain it like a production-scale AI platform, not just “there’s an AI model”.
+
+---
+
+# 1. Start with Requirements
+
+In interviews, always begin with requirements.
+
+## Functional Requirements
+
+A ChatGPT-like app should support:
+
+* User authentication
+* Chat conversations
+* Context memory
+* Streaming AI responses
+* Multi-device sync
+* File/image uploads
+* Search/RAG (Retrieval Augmented Generation)
+* Voice support (optional)
+* Rate limiting
+* Conversation history
+
+## Non-Functional Requirements
+
+* Low latency
+* High availability
+* Massive scalability
+* Fault tolerance
+* Secure user data
+* GPU-efficient inference
+* Real-time streaming
+* Cost optimization
+
+---
+
+# 2. High-Level Architecture
+
+You should draw this mentally:
+
+```text
+Client Apps
+(Web / iOS / Android)
+        |
+API Gateway / Load Balancer
+        |
+------------------------------------------------
+|            Backend Services                  |
+|----------------------------------------------|
+| Auth Service                                 |
+| Chat Service                                 |
+| Conversation Service                         |
+| Prompt Orchestrator                          |
+| AI Inference Service                         |
+| Moderation Service                           |
+| Billing / Rate Limiter                       |
+------------------------------------------------
+        |
+------------------------------------------------
+|               Data Layer                     |
+|----------------------------------------------|
+| Redis Cache                                  |
+| PostgreSQL / Cassandra                       |
+| Vector DB                                    |
+| Object Storage                               |
+------------------------------------------------
+        |
+GPU Inference Cluster (LLMs)
+```
+
+---
+
+# 3. Explain End-to-End Request Flow
+
+This is the MOST IMPORTANT part.
+
+## Step-by-Step Flow
+
+### Step 1 — User Sends Message
+
+Client sends:
+
+```json
+{
+  "conversation_id": "123",
+  "message": "Explain Redis caching"
+}
+```
+
+to backend.
+
+---
+
+### Step 2 — API Gateway
+
+Responsibilities:
+
+* Authentication
+* SSL termination
+* Rate limiting
+* Routing
+* DDoS protection
+
+Possible tools:
+
+* NGINX
+* Envoy
+* Kong
+
+---
+
+### Step 3 — Chat Service
+
+Chat service:
+
+* Validates request
+* Fetches previous conversation
+* Builds context window
+
+Example:
+
+```text
+System Prompt
++
+Conversation History
++
+Current User Query
+```
+
+---
+
+### Step 4 — Prompt Orchestrator
+
+This is critical in modern AI systems.
+
+It:
+
+* Formats prompts
+* Injects system instructions
+* Calls tools/search
+* Retrieves relevant docs (RAG)
+* Applies moderation
+* Compresses long history
+
+---
+
+### Step 5 — Context Retrieval (RAG)
+
+If user asks:
+
+> “Summarize my uploaded PDF”
+
+System:
+
+* Converts documents into embeddings
+* Stores them in Vector DB
+* Searches semantically relevant chunks
+
+Architecture:
+
+```text
+PDF
+ → Chunking
+ → Embedding Model
+ → Vector DB
+ → Semantic Search
+ → Relevant Chunks
+ → Prompt
+```
+
+Possible Vector DBs:
+
+* Pinecone
+* Weaviate
+* FAISS
+
+Explain embeddings clearly:
+
+> Embeddings convert text into high-dimensional vectors so semantically similar text lies close together.
+
+---
+
+# 4. LLM Inference Pipeline
+
+This is where most candidates become weak.
+
+Explain properly.
+
+## Inference Flow
+
+```text
+Prompt
+  ↓
+Tokenizer
+  ↓
+GPU Model Inference
+  ↓
+Next Token Prediction
+  ↓
+Streaming Decoder
+  ↓
+Client
+```
+
+The model predicts one token at a time.
+
+Example:
+
+```text
+User: "Capital of India is"
+
+Model predicts:
+"New"
+then "Delhi"
+```
+
+---
+
+## Explain Transformer Briefly
+
+You don't need deep ML theory, but enough for SDE-2.
+
+Say:
+
+> Modern LLMs are transformer-based architectures using self-attention mechanisms that allow parallel understanding of context across the sequence.
+
+Key concepts:
+
+* Tokens
+* Attention
+* Context window
+* KV cache
+
+---
+
+# 5. Streaming Responses
+
+Very important interview topic.
+
+Instead of waiting for full response:
+
+```text
+token1 → token2 → token3
+```
+
+Server streams partial outputs using:
+
+* WebSockets
+* SSE (Server Sent Events)
+* HTTP streaming
+
+Benefits:
+
+* Lower perceived latency
+* Better UX
+
+---
+
+# 6. Conversation Storage Design
+
+## What gets stored?
+
+### Structured DB
+
+Use PostgreSQL/Cassandra for:
+
+* User metadata
+* Conversation metadata
+* Message indexes
+
+### Object Storage
+
+Store:
+
+* Images
+* PDFs
+* Audio
+
+using:
+
+* S3
+* GCS
+
+---
+
+## Conversation Schema Example
+
+```json
+Conversation {
+  conversation_id,
+  user_id,
+  created_at
+}
+
+Message {
+  message_id,
+  conversation_id,
+  role,
+  content,
+  timestamp
+}
+```
+
+---
+
+# 7. Scaling Challenges
+
+This section differentiates SDE-2 candidates.
+
+---
+
+## Problem 1 — GPU Bottleneck
+
+LLMs are GPU-expensive.
+
+Solutions:
+
+* Request batching
+* Quantization
+* Model sharding
+* Distillation
+* KV caching
+
+---
+
+## Problem 2 — Long Context Windows
+
+Large conversations increase latency.
+
+Solutions:
+
+* Context summarization
+* Sliding windows
+* Semantic retrieval
+* Conversation compression
+
+---
+
+## Problem 3 — High QPS
+
+Millions of users simultaneously.
+
+Solutions:
+
+* Horizontal scaling
+* Stateless APIs
+* Load balancing
+* Queue-based inference
+
+---
+
+## Problem 4 — Hot Conversations
+
+Popular chats cause repeated reads.
+
+Use:
+
+* Redis caching
+
+Cache:
+
+* Recent conversation history
+* User session state
+* Embeddings
+
+---
+
+# 8. Explain AI Safety Layer
+
+This is a strong differentiator.
+
+## Moderation Pipeline
+
+Before prompt reaches model:
+
+* Toxicity checks
+* Jailbreak detection
+* Prompt injection filtering
+
+After response:
+
+* Safety moderation
+* PII filtering
+* Policy enforcement
+
+---
+
+# 9. Reliability & Observability
+
+Mention this explicitly.
+
+## Metrics
+
+Track:
+
+* Token latency
+* Time to first token (TTFT)
+* GPU utilization
+* Error rate
+* Queue length
+* Tokens/sec
+
+---
+
+## Reliability Techniques
+
+* Circuit breakers
+* Retry mechanisms
+* Backpressure handling
+* Fallback smaller models
+* Multi-region deployment
+
+---
+
+# 10. Cost Optimization
+
+This is a VERY common follow-up.
+
+LLMs are expensive.
+
+Optimizations:
+
+* Smaller models for easy queries
+* Caching repeated prompts
+* Dynamic model routing
+* Quantized inference
+* Autoscaling GPUs
+
+Example:
+
+```text
+Simple math → small model
+Complex coding → large model
+```
+
+---
+
+# 11. Multi-Model Architecture
+
+Modern AI systems rarely use ONE model.
+
+Architecture:
+
+```text
+Router
+ ├── Fast cheap model
+ ├── Coding model
+ ├── Reasoning model
+ └── Image model
+```
+
+Routing based on:
+
+* Query type
+* Latency needs
+* Cost constraints
+
+---
+
+# 12. Security Considerations
+
+Mention briefly:
+
+* Encryption at rest
+* TLS in transit
+* PII masking
+* RBAC
+* Signed URLs for uploads
+* Audit logs
+
+---
+
+# 13. Strong Interview Closing Statement
+
+A good wrap-up:
+
+> “A ChatGPT-like system is essentially a massively distributed real-time inference platform combining API orchestration, distributed storage, GPU scheduling, semantic retrieval, and streaming token generation while balancing latency, scalability, safety, and cost.”
+
+That sounds senior-level.
+
+---
+
+# Possible Follow-Up Questions + Answers
+
+---
+
+## Q1. Why use Redis here?
+
+Answer:
+
+* Fast retrieval of recent chats
+* Session caching
+* Reduces DB load
+* Useful for hot conversations
+* Can cache embeddings/prompts
+
+---
+
+## Q2. Why not store everything in PostgreSQL?
+
+Answer:
+
+Because:
+
+* Conversation history can grow massively
+* Vector search is inefficient in relational DBs
+* Need separate systems optimized for:
+
+  * transactional data
+  * semantic retrieval
+  * blob storage
+
+---
+
+## Q3. How does streaming work?
+
+Answer:
+
+Model generates tokens incrementally.
+
+Backend streams tokens via:
+
+* SSE
+* WebSockets
+
+instead of waiting for entire completion.
+
+Improves perceived latency significantly.
+
+---
+
+## Q4. What is a Vector DB?
+
+Answer:
+
+A database optimized for similarity search on embeddings.
+
+Used in:
+
+* semantic search
+* RAG pipelines
+* document retrieval
+
+---
+
+## Q5. What happens if GPUs are overloaded?
+
+Answer:
+
+Possible solutions:
+
+* Queue requests
+* Autoscale GPU workers
+* Use fallback smaller models
+* Apply rate limiting
+* Prioritize premium users
+
+---
+
+## Q6. How do you reduce LLM latency?
+
+Answer:
+
+* KV caching
+* Quantization
+* Request batching
+* Optimized inference engines
+* Smaller models
+* Parallel token generation optimizations
+
+---
+
+## Q7. What is KV Cache?
+
+Answer:
+
+Transformer models reuse previously computed attention key/value states instead of recomputing entire context every token generation.
+
+This significantly reduces inference latency.
+
+---
+
+## Q8. How would you support 100M users?
+
+Answer:
+
+Discuss:
+
+* Stateless microservices
+* Distributed DBs
+* CDN
+* Multi-region deployment
+* GPU autoscaling
+* Queue-based inference
+* Kafka for async processing
+* Redis caching
+* Sharded vector DBs
+
+---
+
+## Q9. How does ChatGPT remember context?
+
+Answer:
+
+It does NOT truly remember permanently by default.
+
+The backend sends prior conversation messages within the model’s context window for every request.
+
+Long-term memory can be implemented using:
+
+* vector databases
+* summaries
+* user memory stores
+
+---
+
+## Q10. Difference between training and inference?
+
+Answer:
+
+Training:
+
+* learns model weights
+* extremely compute-heavy
+* offline process
+
+Inference:
+
+* uses trained model for prediction
+* optimized for low latency
+* happens during user interaction
+
+---
+
+# Important Interview Tips
+
+## DO:
+
+* Talk in layers
+* Mention tradeoffs
+* Discuss bottlenecks
+* Quantify scale
+* Mention caching
+* Mention GPU constraints
+
+---
+
+## DON’T:
+
+* Go too deep into ML math
+* Spend 20 mins on transformers
+* Ignore scalability
+* Ignore cost
+
+---
+
+# A Simple 2-Minute Interview Summary
+
+If interviewer says “Give quick overview”:
+
+> “A ChatGPT-like app consists of client apps communicating with backend APIs through a gateway. The backend orchestrates prompts, retrieves conversation context and external knowledge via vector search, and sends the final prompt to GPU-based LLM inference servers. Responses are streamed token-by-token back to the client using SSE/WebSockets. The system relies heavily on Redis caching, distributed databases, vector stores, autoscaling GPU clusters, moderation pipelines, and observability systems to achieve low latency, scalability, and reliability at massive scale.”
+
+That answer is strong enough for many SDE-2 interviews.
