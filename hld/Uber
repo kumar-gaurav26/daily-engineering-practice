@@ -1,0 +1,721 @@
+# Design Uber’s Nearby Driver Discovery System (1M Requests/sec)
+
+This is one of the most common **geo-distributed real-time system design** interview problems for an SDE-2 role.
+
+The interviewer usually wants to evaluate:
+
+* Real-time distributed systems knowledge
+* Geospatial indexing
+* Scalability
+* Low-latency design
+* Data partitioning
+* Streaming/location updates
+* Caching strategies
+* Fault tolerance
+* Tradeoffs
+
+---
+
+# 1. Problem Statement
+
+Design a system like Uber Technologies that can:
+
+* Continuously track millions of drivers
+* Handle ~1 million rider requests/sec
+* Find nearby drivers within milliseconds
+* Support real-time movement updates
+* Scale globally
+
+---
+
+# 2. Functional Requirements
+
+## Core Features
+
+1. Driver sends location every few seconds
+2. Rider requests a cab
+3. System finds nearest available drivers
+4. Match rider with one driver
+5. Real-time updates
+
+---
+
+# 3. Non-Functional Requirements
+
+## Scale Assumptions
+
+Example assumptions you can speak in interview:
+
+* 100M daily active users
+* 10M active drivers
+* Drivers update location every 4 seconds
+* 1M ride requests/sec during peak
+* Nearby search latency < 100 ms
+
+---
+
+# 4. High-Level Architecture
+
+```text
+Driver App
+   |
+Location Update Service
+   |
+GeoSpatial Index
+   |
+Kafka / Streaming Layer
+   |
+Nearby Driver Service
+   |
+Matching Service
+   |
+Rider App
+```
+
+---
+
+# 5. Core Challenge
+
+The main challenge is:
+
+> “How do we efficiently find drivers near a rider in real time?”
+
+Naively checking all drivers is impossible.
+
+If 10 million drivers exist:
+
+```text
+O(n) scan = disaster
+```
+
+We need:
+
+```text
+O(log n) or near constant lookup
+```
+
+---
+
+# 6. Key Concept → GeoHash / Spatial Indexing
+
+This is the MOST IMPORTANT part of the interview.
+
+---
+
+# 7. What is GeoHash?
+
+GeoHash converts latitude & longitude into a string.
+
+Example:
+
+```text
+Bangalore:
+12.9716, 77.5946
+
+GeoHash:
+tdr1v
+```
+
+Nearby places share common prefixes.
+
+Example:
+
+```text
+tdr1v
+tdr1x
+tdr1y
+```
+
+This makes geographic proximity searchable like text.
+
+---
+
+# 8. Why GeoHash Works
+
+Instead of searching the whole world:
+
+```text
+Search only nearby geohash buckets
+```
+
+So the system stores:
+
+```text
+GeoHash -> List of Drivers
+```
+
+Example:
+
+```text
+tdr1v -> [D1, D2, D3]
+tdr1x -> [D4, D5]
+```
+
+---
+
+# 9. Architecture Deep Dive
+
+## Step 1 — Driver Sends Location
+
+Driver app sends:
+
+```json
+{
+  "driverId": "D123",
+  "lat": 12.9716,
+  "lon": 77.5946
+}
+```
+
+every few seconds.
+
+---
+
+## Step 2 — Location Service
+
+Responsibilities:
+
+* Validate request
+* Compute geohash
+* Update driver's latest location
+* Push to streaming system
+
+---
+
+# 10. Why Kafka?
+
+Use Apache Kafka because:
+
+* Massive write throughput
+* Partitioned scalability
+* Durable streams
+* Real-time processing
+
+Location updates become events:
+
+```text
+driver-location-updated
+```
+
+---
+
+# 11. In-Memory Geo Store
+
+This is critical.
+
+We cannot query databases for every request.
+
+Use:
+
+* Redis
+* Custom in-memory geo index
+
+Store:
+
+```text
+GeoHash -> Active Drivers
+```
+
+Example:
+
+```text
+tdr1v:
+   D1 -> (lat, lon)
+   D2 -> (lat, lon)
+```
+
+Everything remains in memory for ultra-low latency.
+
+---
+
+# 12. How Nearby Search Works
+
+Suppose rider is at:
+
+```text
+12.9718, 77.5948
+```
+
+System:
+
+## Step 1
+
+Compute rider geohash.
+
+```text
+tdr1v
+```
+
+---
+
+## Step 2
+
+Fetch nearby buckets:
+
+```text
+tdr1v
+tdr1x
+tdr1y
+tdr1u
+```
+
+---
+
+## Step 3
+
+Get drivers from Redis.
+
+---
+
+## Step 4
+
+Compute actual distance using Haversine formula.
+
+d = 2r\arcsin\left(\sqrt{\sin^2\left(\frac{\phi_2-\phi_1}{2}\right)+\cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\lambda_2-\lambda_1}{2}\right)}\right)
+
+Where:
+
+* ( \phi ) = latitude
+* ( \lambda ) = longitude
+
+---
+
+## Step 5
+
+Return top K nearest drivers.
+
+Example:
+
+```text
+Top 5 nearest drivers
+```
+
+Complexity becomes:
+
+```text
+O(k)
+```
+
+instead of:
+
+```text
+O(n)
+```
+
+Huge optimization.
+
+---
+
+# 13. How It Handles 1M Requests/sec
+
+This is where interviews become interesting.
+
+---
+
+# 14. Horizontal Partitioning
+
+Partition by geohash prefix.
+
+Example:
+
+```text
+Server A -> tdr
+Server B -> tds
+Server C -> tdt
+```
+
+Each server owns a geographic region.
+
+Benefits:
+
+* Localized traffic
+* Independent scaling
+* Better cache locality
+
+---
+
+# 15. Regional Data Centers
+
+Use regional clusters:
+
+* India cluster
+* US cluster
+* Europe cluster
+
+Users hit nearest region.
+
+Reduces latency significantly.
+
+---
+
+# 16. Real-Time Location Updates
+
+Challenge:
+
+Drivers move continuously.
+
+Updating databases every second is expensive.
+
+Solution:
+
+## Keep Hot Data in Memory
+
+Use Redis or memory grids.
+
+Cold storage goes to:
+
+* Apache Cassandra
+* Amazon DynamoDB
+
+Memory layer stores only:
+
+```text
+currently active drivers
+```
+
+---
+
+# 17. Matching Service
+
+After finding nearby drivers:
+
+Matching service decides:
+
+* Best ETA
+* Surge pricing
+* Driver score
+* Cancellation probability
+* Driver acceptance likelihood
+
+This becomes a ranking problem.
+
+Often ML-driven.
+
+---
+
+# 18. Preventing Duplicate Assignment
+
+Important interview question.
+
+Two riders may get same driver.
+
+Solution:
+
+## Distributed Locking
+
+Example:
+
+```text
+SETNX driver_123 LOCK
+```
+
+using Redis.
+
+Only one request succeeds.
+
+---
+
+# 19. Handling Driver Movement
+
+Another common question:
+
+> What if driver moves while searching?
+
+Answer:
+
+* Use latest location snapshot
+* Small staleness acceptable
+* Eventual consistency is okay
+
+Because ride matching tolerates slight inaccuracies.
+
+---
+
+# 20. Hotspot Problem
+
+City centers become overloaded.
+
+Example:
+
+* Bangalore airport
+* Times Square
+* Stadium exits
+
+One geohash gets too many drivers.
+
+---
+
+# 21. Solution → Dynamic GeoHash Precision
+
+Dense areas:
+
+```text
+Use longer geohash
+```
+
+Sparse areas:
+
+```text
+Use shorter geohash
+```
+
+Adaptive partitioning balances load.
+
+---
+
+# 22. Alternative Approaches
+
+Interviewers may ask alternatives.
+
+## Option 1 — QuadTree
+
+Tree-based spatial partitioning.
+
+Good for:
+
+* Dynamic geo queries
+
+Bad:
+
+* Complex distributed scaling
+
+---
+
+## Option 2 — S2 Geometry
+
+Used by:
+
+* Google
+
+Maps earth to hierarchical cells.
+
+Very efficient globally.
+
+---
+
+## Option 3 — KD Tree
+
+Good for static datasets.
+
+Poor for highly dynamic moving drivers.
+
+---
+
+# 23. Database Choice Discussion
+
+## Why SQL Alone Fails
+
+Traditional SQL query:
+
+```sql
+SELECT * FROM drivers
+ORDER BY distance
+LIMIT 5;
+```
+
+fails at huge scale because:
+
+* Heavy computation
+* Disk bottlenecks
+* High latency
+
+---
+
+# 24. Why Redis GEO Commands Help
+
+Redis supports:
+
+```text
+GEOADD
+GEORADIUS
+```
+
+Very fast for nearby lookup.
+
+But at Uber scale:
+
+* Often custom geo indexing is used
+* Better control over sharding
+
+---
+
+# 25. Caching Strategy
+
+## Multi-Level Cache
+
+### L1
+
+Application memory cache
+
+### L2
+
+Redis cluster
+
+### L3
+
+Persistent storage
+
+---
+
+# 26. Fault Tolerance
+
+Interviewer expects this.
+
+## Replication
+
+Each geo partition replicated.
+
+Example:
+
+```text
+Primary + Replica
+```
+
+---
+
+## Kafka Durability
+
+Kafka replicates events across brokers.
+
+Prevents location loss.
+
+---
+
+# 27. Consistency vs Availability
+
+This is a CAP theorem discussion point.
+
+Uber prioritizes:
+
+```text
+Availability > Strong Consistency
+```
+
+Because:
+
+* Slight stale locations acceptable
+* Service downtime unacceptable
+
+---
+
+# 28. End-to-End Flow
+
+Complete flow:
+
+```text
+1. Driver updates location
+2. Location stored in geo index
+3. Rider requests ride
+4. Nearby service finds candidates
+5. Matching service ranks drivers
+6. Lock acquired
+7. Ride assigned
+```
+
+---
+
+# 29. Bottlenecks & Optimizations
+
+## Bottleneck 1 — Massive write traffic
+
+Solution:
+
+* Kafka buffering
+* Batched writes
+
+---
+
+## Bottleneck 2 — Hot partitions
+
+Solution:
+
+* Dynamic sharding
+
+---
+
+## Bottleneck 3 — Cross-region latency
+
+Solution:
+
+* Regional clusters
+
+---
+
+# 30. What Interviewers REALLY Want
+
+For SDE-2, focus on:
+
+## Must Discuss
+
+* GeoHash
+* Partitioning
+* Redis
+* Kafka
+* Real-time indexing
+* Horizontal scaling
+* Distributed locking
+* CAP tradeoffs
+
+---
+
+# 31. Common Follow-Up Questions
+
+## Q1. Why GeoHash over QuadTree?
+
+Answer:
+
+* Easier distributed partitioning
+* String prefix routing
+* Better scalability
+
+---
+
+## Q2. Why Redis?
+
+Answer:
+
+* In-memory speed
+* Millisecond latency
+* GEO support
+
+---
+
+## Q3. How do you prevent stale drivers?
+
+Answer:
+
+Use TTL.
+
+If no update for 15 sec:
+
+```text
+mark driver offline
+```
+
+---
+
+## Q4. How would you support surge pricing?
+
+Answer:
+
+Use demand/supply ratio per geo region.
+
+---
+
+## Q5. How to scale globally?
+
+Answer:
+
+* Regional clusters
+* Geo-based routing
+* Replication
+
+---
+
+# 32. Strong Interview Closing Statement
+
+A good concluding summary:
+
+> “The core idea is converting real-time geo search into efficient partitioned in-memory lookups using geospatial indexing like GeoHash, backed by distributed streaming systems such as Kafka and horizontally scalable caches like Redis.”
+
+That sounds very strong in SDE-2 interviews.
