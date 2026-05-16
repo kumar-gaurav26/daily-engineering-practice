@@ -1,0 +1,937 @@
+# Designing Tinder for an SDE-2 System Design Interview
+
+A strong Tinder system design answer should focus on:
+
+* Geospatial matching
+* Recommendation engine
+* Real-time interactions
+* High write throughput
+* Feed ranking
+* Scalability
+* Low latency
+* Privacy and abuse prevention
+
+The interviewer mainly wants to evaluate:
+
+* Distributed systems understanding
+* Feed/recommendation architecture
+* Real-time event handling
+* Database design decisions
+* Scalability tradeoffs
+
+---
+
+# 1. Clarify Requirements
+
+Start by asking clarifying questions.
+
+## Functional Requirements
+
+Users should be able to:
+
+* Create profile
+* Upload photos
+* Set preferences
+* Discover nearby users
+* Swipe left/right
+* Match when both like each other
+* Chat after matching
+* Receive notifications
+
+Optional:
+
+* Boosts
+* Super Likes
+* Premium subscriptions
+* Rewind
+
+---
+
+## Non-Functional Requirements
+
+* Low latency feed loading
+* High availability
+* Massive scalability
+* Real-time matching
+* Geo-aware search
+* Fault tolerance
+* Abuse/spam prevention
+
+---
+
+# 2. Scale Estimation
+
+Example assumptions:
+
+* 100M DAU
+* 10M concurrent users
+* Billions of swipes/day
+* Millions of matches/day
+
+Important insight:
+
+> Tinder is write-heavy because every swipe is an event.
+
+This is a good interview point.
+
+---
+
+# 3. High-Level Architecture
+
+```text id="5e3wgw"
+Mobile Clients
+     |
+API Gateway / Load Balancer
+     |
+------------------------------------------------
+| User Service                                  |
+| Profile Service                               |
+| Recommendation Service                        |
+| Swipe Service                                 |
+| Match Service                                 |
+| Chat Service                                  |
+| Notification Service                          |
+------------------------------------------------
+     |
+Event Queue / Kafka
+     |
+------------------------------------------------
+| Redis Cache                                   |
+| Geospatial Index                              |
+| ML Ranking System                             |
+| Analytics Pipeline                            |
+------------------------------------------------
+     |
+Databases + Object Storage
+```
+
+---
+
+# 4. Core Components
+
+# A. User/Profile Service
+
+Stores:
+
+* profile info
+* photos
+* preferences
+* bio
+* age
+* gender
+
+## Storage
+
+### Metadata DB
+
+Use:
+
+* MySQL/Postgres/Cassandra
+
+### Photos
+
+Use object storage:
+
+* S3/GCS
+
+CDN for fast image delivery.
+
+---
+
+# B. Geolocation Service
+
+This is one of the most important components.
+
+Tinder must show:
+
+* nearby users
+* within configurable distance
+
+---
+
+# How Nearby Matching Works
+
+Each user periodically sends:
+
+* latitude
+* longitude
+
+Store active location in:
+
+* Redis GEO index
+* Elasticsearch geo queries
+* Geohash-based partitioning
+
+---
+
+# Geohashing
+
+Core interview concept.
+
+Convert location into:
+
+* grid-like geohash
+
+Nearby users share prefixes.
+
+Example:
+
+```text id="k7g7hn"
+dr5ru
+dr5rv
+dr5rw
+```
+
+Nearby cells can be queried efficiently.
+
+---
+
+# Why Geohash?
+
+Without indexing:
+
+```text id="l05rns"
+O(n) distance comparisons
+```
+
+With geohash:
+
+* search reduced to nearby cells only
+
+Huge optimization.
+
+---
+
+# 5. Recommendation Service
+
+This is the "swiping feed" engine.
+
+Responsibilities:
+
+* fetch nearby users
+* apply filters
+* rank candidates
+* remove already swiped users
+
+---
+
+# Candidate Generation Pipeline
+
+## Step 1: Geo Filter
+
+Nearby users within radius.
+
+---
+
+## Step 2: Preference Filter
+
+Age/gender/preferences.
+
+---
+
+## Step 3: Activity Filter
+
+Exclude:
+
+* inactive users
+* banned users
+* low-quality accounts
+
+---
+
+## Step 4: Already Seen Filter
+
+Avoid duplicates.
+
+Store swipe history.
+
+---
+
+## Step 5: Ranking
+
+ML-based scoring.
+
+Possible ranking signals:
+
+* mutual interests
+* profile popularity
+* activity recency
+* swipe probability
+* response rate
+* attractiveness score (historically Elo-style)
+
+---
+
+# Final Feed
+
+Return top N ranked candidates.
+
+---
+
+# 6. Swipe Service
+
+Critical high-write service.
+
+Every swipe becomes an event.
+
+Example:
+
+```json id="ycqghm"
+{
+  "swiper_id": 101,
+  "target_id": 202,
+  "action": "RIGHT",
+  "timestamp": 123456
+}
+```
+
+---
+
+# Storage Requirements
+
+Massive append-heavy workload.
+
+Good choices:
+
+* Cassandra
+* DynamoDB
+* Bigtable
+
+Why?
+
+* very high write throughput
+* horizontally scalable
+* append-friendly
+
+---
+
+# 7. Match Service
+
+When user A likes B:
+
+Check:
+
+* did B already like A?
+
+If yes:
+
+* create match
+
+---
+
+# Efficient Match Detection
+
+Naive approach:
+
+```text id="p0g7cr"
+SELECT * FROM swipes
+WHERE swiper=B AND target=A
+```
+
+Too slow at scale.
+
+---
+
+# Better Approach
+
+Maintain:
+
+* Redis cache of likes
+
+Flow:
+
+```text id="0s6d1k"
+A likes B
+→ write swipe event
+→ check Redis set for reciprocal like
+→ if exists → create match
+```
+
+---
+
+# Match Creation
+
+Store:
+
+```json id="mjlwmh"
+{
+  "match_id": "xyz",
+  "user1": 101,
+  "user2": 202,
+  "created_at": ""
+}
+```
+
+---
+
+# 8. Real-Time Notifications
+
+When match occurs:
+
+* push notification immediately
+
+Architecture:
+
+```text id="2s8lf6"
+Match Service
+→ Kafka Event
+→ Notification Service
+→ APNS/FCM
+```
+
+---
+
+# 9. Chat System
+
+Separate subsystem.
+
+Requirements:
+
+* real-time messaging
+* typing indicators
+* delivery status
+* media sharing
+
+Use:
+
+* WebSockets
+
+Store chats in:
+
+* Cassandra/DynamoDB
+
+Because chats are:
+
+* append-only
+* high scale
+
+---
+
+# 10. Feed Scalability
+
+# A. Precompute vs Real-Time
+
+## Real-Time Generation
+
+Generate candidates on request.
+
+Pros:
+
+* fresher results
+
+Cons:
+
+* higher latency
+
+---
+
+## Precomputed Recommendations
+
+Background workers prepare candidate lists.
+
+Pros:
+
+* fast response
+
+Cons:
+
+* stale recommendations
+
+---
+
+# Real Tinder Likely Uses Hybrid
+
+* partially precomputed
+* dynamically reranked
+
+Good tradeoff answer.
+
+---
+
+# 11. Caching
+
+Use Redis heavily.
+
+Cache:
+
+* candidate feeds
+* active profiles
+* swipe history
+* match states
+* geolocation data
+
+Why?
+
+Feed generation is expensive.
+
+---
+
+# 12. Event-Driven Architecture
+
+Very important point.
+
+Swipes produce events.
+
+Kafka pipeline:
+
+```text id="1k3jlwm"
+Swipe Event
+→ Match Detection
+→ Analytics
+→ Recommendation Training
+→ Fraud Detection
+→ Notifications
+```
+
+This decouples services.
+
+---
+
+# 13. Database Design
+
+# User/Profile DB
+
+Relational or document DB.
+
+---
+
+# Swipe DB
+
+Write-heavy distributed NoSQL.
+
+Schema:
+
+```text id="6s0mbm"
+Partition Key: swiper_id
+Sort Key: timestamp
+```
+
+---
+
+# Match DB
+
+Can shard by:
+
+* user_id
+
+---
+
+# Chat DB
+
+Append-only distributed store.
+
+---
+
+# 14. Abuse Prevention
+
+Important production topic.
+
+## Problems
+
+* fake accounts
+* bots
+* swipe spam
+* harassment
+* scams
+
+---
+
+# Solutions
+
+## Rate Limiting
+
+Limit swipes/minute.
+
+---
+
+## ML Fraud Detection
+
+Detect:
+
+* abnormal swiping
+* bot-like behavior
+* duplicate accounts
+
+---
+
+## Image Moderation
+
+Use AI moderation pipelines.
+
+---
+
+## Shadow Banning
+
+Common industry technique.
+
+---
+
+# 15. Premium Features
+
+# Boost
+
+Temporarily increase ranking score.
+
+---
+
+# Super Like
+
+High-priority notification + ranking boost.
+
+---
+
+# Gold/Platinum
+
+Additional services:
+
+* who liked you
+* unlimited swipes
+* passport mode
+
+Mention:
+
+> Premium features usually modify ranking and candidate selection logic.
+
+Nice product-system integration point.
+
+---
+
+# 16. Scaling Challenges
+
+# A. Celebrity Problem
+
+Highly popular users receive massive traffic.
+
+Solutions:
+
+* cache aggressively
+* async fanout
+* queue writes
+
+---
+
+# B. Geo Hotspots
+
+Cities like:
+
+* NYC
+* London
+* Bangalore
+
+Huge local query pressure.
+
+Solutions:
+
+* geoshard partitioning
+* regional clusters
+
+---
+
+# C. Feed Freshness
+
+Need balance between:
+
+* relevance
+* diversity
+* freshness
+
+---
+
+# 17. Recommendation System Deep Dive
+
+Interviewers love this.
+
+---
+
+# Simple Ranking Formula
+
+```text id="uw6hqb"
+score =
+  proximity_weight +
+  activity_weight +
+  compatibility_weight +
+  attractiveness_score +
+  engagement_probability
+```
+
+---
+
+# ML System
+
+Train on:
+
+* swipe behavior
+* chat initiation
+* reply rate
+* profile completion
+* session duration
+
+Objective:
+maximize successful matches and engagement.
+
+---
+
+# 18. Consistency Requirements
+
+Tinder mostly uses:
+
+* eventual consistency
+
+Example:
+
+* swipe may take milliseconds to reflect
+
+That is acceptable.
+
+Strong consistency unnecessary for most flows.
+
+---
+
+# 19. Reliability
+
+# Multi-region deployment
+
+Serve users from nearest region.
+
+---
+
+# Replication
+
+Replicate:
+
+* profiles
+* matches
+* chats
+
+---
+
+# Kafka Durability
+
+Ensures swipe events are not lost.
+
+---
+
+# Retry Mechanisms
+
+For notifications and match processing.
+
+---
+
+# 20. Privacy & Security
+
+Important production consideration.
+
+Mention:
+
+* encrypted communication (TLS)
+* photo access control
+* GDPR deletion
+* block/report systems
+* phone verification
+
+---
+
+# 21. Final Architecture Summary
+
+Your final wrap-up:
+
+> Tinder can be designed using a microservices architecture with a recommendation engine, geospatial indexing, high-throughput swipe processing, Redis caching, Kafka-based event pipelines, distributed NoSQL databases, and WebSocket-based chat infrastructure. The system prioritizes low latency, scalability, recommendation quality, and real-time user engagement while supporting millions of concurrent users globally.
+
+---
+
+# Cross Questions Interviewers Ask
+
+# Q1. How would you efficiently find nearby users?
+
+Use:
+
+* geohashing
+* Redis GEO indexes
+* spatial indexing
+
+Avoid full-table scans.
+
+---
+
+# Q2. Why Cassandra/DynamoDB for swipes?
+
+Because swipes are:
+
+* append-heavy
+* massive scale
+* high write throughput
+
+Distributed NoSQL handles this well.
+
+---
+
+# Q3. How do you prevent duplicate recommendations?
+
+Maintain:
+
+* swipe history
+* viewed profiles cache
+
+Exclude already seen users during feed generation.
+
+---
+
+# Q4. How would you scale real-time chat?
+
+Use:
+
+* WebSockets
+* chat gateways
+* distributed message queues
+
+Store messages in append-only NoSQL DB.
+
+---
+
+# Q5. Why event-driven architecture?
+
+Because one swipe triggers:
+
+* match detection
+* analytics
+* notifications
+* ML training
+* fraud checks
+
+Kafka decouples these workloads.
+
+---
+
+# Q6. How do you detect a match efficiently?
+
+Use:
+
+* Redis sets/caches for likes
+
+Instead of expensive DB joins.
+
+---
+
+# Q7. How would you reduce recommendation latency?
+
+* precompute feeds
+* cache candidates
+* use Redis
+* async ranking pipelines
+
+---
+
+# Q8. How do you shard geolocation data?
+
+Using:
+
+* geohash prefixes
+* regional partitioning
+
+Nearby users colocated logically.
+
+---
+
+# Q9. What consistency model would you use?
+
+Mostly eventual consistency.
+
+Reason:
+
+* better availability
+* lower latency
+
+Strict consistency unnecessary.
+
+---
+
+# Q10. How do you handle fake accounts?
+
+* phone/email verification
+* ML anomaly detection
+* rate limiting
+* device fingerprinting
+* moderation systems
+
+---
+
+# Q11. How would you handle viral users?
+
+* aggressive caching
+* async processing
+* feed throttling
+* queue-based fanout
+
+---
+
+# Q12. Why not generate recommendations fully in real time?
+
+Too expensive at scale.
+
+Need:
+
+* hybrid precomputation
+* caching
+* reranking
+
+---
+
+# Q13. How do you store photos efficiently?
+
+Use:
+
+* object storage
+* CDN caching
+* image compression/resizing
+
+Never store large binaries directly in DB.
+
+---
+
+# Q14. How would you improve recommendation quality?
+
+Use ML features:
+
+* swipe patterns
+* conversation success
+* profile similarity
+* engagement prediction
+
+---
+
+# Q15. What metrics would you monitor?
+
+Critical metrics:
+
+* swipe latency
+* match success rate
+* feed generation latency
+* recommendation CTR
+* notification delay
+* chat delivery latency
+* abuse detection accuracy
+* DAU/retention
+
+---
+
+# What Makes This an SDE-2 Level Answer
+
+Strong SDE-2 candidates demonstrate:
+
+* Distributed systems thinking
+* Geospatial indexing knowledge
+* Event-driven architecture
+* Recommendation systems understanding
+* Real-time communication
+* Scalability tradeoffs
+* Practical production concerns
+
+The differentiator is explaining:
+
+* geohashing
+* feed ranking
+* Kafka pipelines
+* high write scalability
+* recommendation architecture
+* caching strategies
+* ML integration
