@@ -1,0 +1,861 @@
+# Designing Google Docs for an SDE-2 System Design Interview
+
+A strong SDE-2 answer should focus on:
+
+* Real-time collaborative editing
+* Conflict resolution
+* Low latency synchronization
+* Scalability
+* Reliability
+* Offline support
+* Versioning
+
+Do not over-focus on UI. The interviewer mainly wants:
+
+1. Backend architecture
+2. Distributed systems thinking
+3. Tradeoffs
+
+---
+
+# 1. Clarify Requirements
+
+Start with requirement gathering.
+
+## Functional Requirements
+
+Users should be able to:
+
+* Create/edit documents
+* Collaborate in real-time
+* See others’ cursors and edits
+* Save automatically
+* Maintain version history
+* Share documents with permissions
+* Work offline and sync later
+
+## Non-Functional Requirements
+
+* Very low latency (<100ms perceived delay)
+* High availability
+* Strong durability
+* Horizontal scalability
+* Conflict-free collaboration
+* Support millions of concurrent editors
+
+---
+
+# 2. Estimate Scale
+
+Example assumptions:
+
+* 500M DAU
+* 50M concurrent users
+* Average document size: 100 KB
+* Peak edits/sec: millions
+
+Mention:
+
+> The system is read-heavy but collaboration sessions create intense write bursts.
+
+This shows maturity.
+
+---
+
+# 3. High-Level Architecture
+
+Use this structure in interview:
+
+```text
+Client Apps
+   |
+Load Balancer
+   |
+API Gateway
+   |
+--------------------------------
+| Auth Service                 |
+| Document Metadata Service    |
+| Collaboration Service        |
+| Presence Service             |
+| Versioning Service           |
+--------------------------------
+   |
+Message Broker / WebSocket Layer
+   |
+Distributed Storage
+   |
+Object Store + DB + Cache
+```
+
+---
+
+# 4. Core Components
+
+# A. Client Application
+
+The browser/mobile app maintains:
+
+* Local document copy
+* Cursor positions
+* Pending operations queue
+* WebSocket connection
+
+Client performs:
+
+* Optimistic updates
+* Local buffering
+* Offline persistence
+
+Important point:
+
+> Edits appear instantly locally before server acknowledgment.
+
+This improves perceived latency.
+
+---
+
+# B. WebSocket Layer
+
+HTTP is inefficient for continuous collaboration.
+
+Use:
+
+* WebSockets
+
+Why?
+
+Because collaboration requires:
+
+* bidirectional communication
+* persistent connections
+* low latency push
+
+Flow:
+
+```text
+User types character
+→ operation sent via WebSocket
+→ server broadcasts to collaborators
+```
+
+---
+
+# C. Collaboration Service (MOST IMPORTANT)
+
+This is the heart of the system.
+
+It manages:
+
+* incoming edits
+* ordering
+* conflict resolution
+* broadcasting
+
+This is where interviewer spends most time.
+
+---
+
+# 5. How Real-Time Editing Works
+
+Suppose:
+
+* User A types "H"
+* User B types "Y"
+* Both edit same position simultaneously
+
+How do we avoid corruption?
+
+Two famous approaches:
+
+---
+
+# Approach 1: Operational Transformation (OT)
+
+Used historically in Google Docs.
+
+Idea:
+
+Transform operations based on concurrent edits.
+
+Example:
+
+```text
+Original: "CAT"
+
+A inserts "X" at pos 1
+→ CXAT
+
+B deletes at pos 2
+```
+
+Server transforms operations so both clients converge.
+
+## OT Properties
+
+Need:
+
+* convergence
+* intention preservation
+* causality preservation
+
+---
+
+## OT Flow
+
+```text
+Client A sends operation
+Server assigns sequence number
+Server transforms against concurrent operations
+Server broadcasts transformed operation
+Clients apply transformed operations
+```
+
+---
+
+## Pros
+
+* Mature
+* Efficient
+* Works well for text
+
+## Cons
+
+* Complex transformation logic
+* Hard for edge cases
+* Difficult debugging
+
+---
+
+# Approach 2: CRDTs (Conflict-free Replicated Data Types)
+
+Modern alternative.
+
+Instead of transforming operations:
+
+* every edit gets unique ID
+* merges become mathematically conflict-free
+
+Examples:
+
+* Yjs
+* Automerge
+
+---
+
+## CRDT Advantages
+
+* Better offline support
+* Peer-to-peer friendly
+* Simpler distributed merging
+
+## Drawbacks
+
+* Metadata overhead
+* Higher memory usage
+* More complex storage
+
+---
+
+# Interview Strategy
+
+Say:
+
+> Google Docs historically used OT, but many modern systems are moving toward CRDTs due to better offline collaboration and simpler merge guarantees.
+
+That sounds senior-level.
+
+---
+
+# 6. Data Model
+
+Separate:
+
+## Metadata
+
+Stored in SQL/NoSQL DB.
+
+Example:
+
+```json
+{
+  "doc_id": "123",
+  "owner": "user1",
+  "permissions": [],
+  "created_at": "",
+  "updated_at": ""
+}
+```
+
+---
+
+## Document Content
+
+Can be stored as:
+
+* append-only operations log
+* snapshots + incremental operations
+
+Better approach:
+
+```text
+Periodic Snapshot + Delta Operations
+```
+
+Why?
+
+Replaying millions of edits is slow.
+
+---
+
+# 7. Edit Pipeline
+
+## Step-by-step
+
+### Step 1
+
+Client edits locally instantly.
+
+### Step 2
+
+Operation sent via WebSocket.
+
+Example:
+
+```json
+{
+  "op": "insert",
+  "position": 10,
+  "char": "A",
+  "version": 52
+}
+```
+
+### Step 3
+
+Server validates version.
+
+### Step 4
+
+OT/CRDT conflict resolution applied.
+
+### Step 5
+
+Operation persisted to log.
+
+### Step 6
+
+Broadcast to collaborators.
+
+### Step 7
+
+Clients update local state.
+
+---
+
+# 8. Presence Service
+
+Handles:
+
+* online users
+* cursor positions
+* typing indicators
+
+Usually ephemeral.
+
+Store in:
+
+* Redis
+* in-memory distributed store
+
+Not in primary DB.
+
+---
+
+# 9. Version History
+
+Google Docs supports:
+
+* revision history
+* restore old versions
+
+Implementation:
+
+## Option 1
+
+Store every operation forever.
+
+Too expensive.
+
+## Option 2 (Better)
+
+Use:
+
+* snapshots periodically
+* operation deltas between snapshots
+
+Example:
+
+```text
+Snapshot every 100 operations
+```
+
+To restore:
+
+* load nearest snapshot
+* replay remaining operations
+
+---
+
+# 10. Offline Support
+
+Very important interview topic.
+
+## Client stores:
+
+* local edits
+* operation queue
+* latest snapshot
+
+When internet returns:
+
+* sync queued operations
+* server resolves conflicts via OT/CRDT
+
+Mention:
+
+> CRDTs naturally support offline-first collaboration better than OT.
+
+Good advanced point.
+
+---
+
+# 11. Scalability
+
+# A. Stateless API Servers
+
+Easy horizontal scaling.
+
+---
+
+# B. Sticky Sessions
+
+Important for WebSockets.
+
+Why?
+
+A collaboration session should preferably stay on same collaboration node.
+
+Use:
+
+* consistent hashing
+* sticky load balancing
+
+---
+
+# C. Sharding Documents
+
+Shard by:
+
+* document ID
+
+This distributes active sessions.
+
+---
+
+# D. Pub/Sub Layer
+
+Needed because collaborators may connect to different servers.
+
+Use:
+
+* Kafka
+* Redis Pub/Sub
+* NATS
+
+Flow:
+
+```text
+Server A receives edit
+→ publishes event
+→ Server B receives event
+→ broadcasts to connected users
+```
+
+---
+
+# 12. Caching
+
+Use Redis for:
+
+* active documents
+* collaboration sessions
+* permissions
+* cursor presence
+
+Hot documents stay memory-resident.
+
+---
+
+# 13. Reliability
+
+## Multi-region replication
+
+Replicate:
+
+* metadata
+* snapshots
+* operation logs
+
+---
+
+## Write-Ahead Logging
+
+Never lose edits.
+
+Persist operation before acknowledgment.
+
+---
+
+## Autosave
+
+Google Docs auto-saves continuously.
+
+Typically:
+
+* debounce batching
+* save every few seconds or operation thresholds
+
+---
+
+# 14. Security
+
+Mention briefly:
+
+* OAuth authentication
+* ACL/permission checks
+* encrypted transport (TLS)
+* encrypted storage
+* audit logs
+
+---
+
+# 15. Bottlenecks
+
+## Hot Documents
+
+Problem:
+Millions editing same doc.
+
+Solutions:
+
+* partition document sections
+* limit simultaneous editors
+* hierarchical synchronization
+
+---
+
+## WebSocket Fanout
+
+Large collaboration groups create broadcast pressure.
+
+Solutions:
+
+* efficient pub/sub
+* delta compression
+* batching
+
+---
+
+# 16. Advanced Optimizations
+
+These impress interviewers.
+
+## A. Chunking Documents
+
+Instead of whole document:
+
+* split into blocks/paragraphs
+
+Only synchronize changed chunks.
+
+---
+
+## B. Operational Compression
+
+Merge nearby edits.
+
+Example:
+
+```text
+Typing "hello"
+```
+
+Instead of 5 operations:
+store as one batch insert.
+
+---
+
+## C. Differential Sync
+
+Transmit minimal diffs instead of full state.
+
+---
+
+# 17. Tradeoffs
+
+Always discuss tradeoffs.
+
+| Decision    | Pros              | Cons               |
+| ----------- | ----------------- | ------------------ |
+| OT          | Mature, efficient | Complex            |
+| CRDT        | Offline friendly  | Memory heavy       |
+| WebSockets  | Low latency       | Connection scaling |
+| Snapshots   | Faster restore    | Extra storage      |
+| Redis cache | Fast access       | Consistency issues |
+
+---
+
+# 18. Final Architecture Summary
+
+Your final 30-second wrap-up:
+
+> Google Docs can be designed using WebSocket-based real-time communication, a collaboration service implementing OT or CRDT conflict resolution, distributed document storage with snapshots and operation logs, Redis for active collaboration state, and pub/sub systems for synchronization across servers. The system prioritizes low latency, convergence consistency, scalability, and fault tolerance while supporting offline editing and version history.
+
+---
+
+# Cross Questions Interviewers Commonly Ask
+
+# Q1. Why WebSockets over HTTP polling?
+
+Because:
+
+* lower latency
+* fewer TCP reconnections
+* bidirectional communication
+* efficient real-time updates
+
+Polling creates unnecessary load.
+
+---
+
+# Q2. Why not store the whole document on every edit?
+
+Too expensive:
+
+* storage explosion
+* bandwidth waste
+* slow writes
+
+Instead:
+
+* store operations/deltas
+* periodic snapshots
+
+---
+
+# Q3. OT vs CRDT?
+
+## OT
+
+* operational transformation
+* centralized coordination
+* lower metadata overhead
+
+## CRDT
+
+* mathematically mergeable
+* better offline support
+* eventually consistent
+
+Tradeoff:
+CRDT simpler distributed merging but higher storage overhead.
+
+---
+
+# Q4. How do clients stay consistent?
+
+Using:
+
+* operation ordering
+* version numbers
+* transformation/merge logic
+* convergence guarantees
+
+Eventually all clients reach same state.
+
+---
+
+# Q5. How would you handle offline editing?
+
+Store:
+
+* local snapshot
+* pending operations queue
+
+When online:
+
+* replay operations
+* resolve conflicts
+
+CRDTs are especially useful here.
+
+---
+
+# Q6. How do you scale WebSocket connections?
+
+Use:
+
+* dedicated connection gateways
+* sticky sessions
+* event-driven servers
+* horizontal scaling
+
+Often:
+
+* millions of sockets per cluster
+
+---
+
+# Q7. What database would you use?
+
+## Metadata
+
+SQL or distributed NoSQL.
+
+## Operations Log
+
+Append-heavy datastore:
+
+* Cassandra
+* Bigtable
+* Kafka log
+
+## Snapshots
+
+Blob/object storage.
+
+---
+
+# Q8. How do you recover from server crashes?
+
+Because operations are persisted:
+
+* reconnect clients
+* replay missing operations
+* restore snapshot
+
+No data loss.
+
+---
+
+# Q9. How do you reduce bandwidth?
+
+* operation batching
+* gzip
+* differential sync
+* chunk-level updates
+
+---
+
+# Q10. What happens if two users type at same location?
+
+OT:
+
+* transforms operation order
+
+CRDT:
+
+* deterministic merge using IDs
+
+Both ensure convergence.
+
+---
+
+# Q11. Why not use strong consistency everywhere?
+
+Global strong consistency:
+
+* increases latency
+* reduces availability
+
+Collaboration systems prefer:
+
+* eventual consistency
+* fast convergence
+
+User experience matters more than strict serialization.
+
+---
+
+# Q12. How would you support comments and suggestions mode?
+
+Treat them as:
+
+* separate annotation layers
+
+Do not modify base document directly.
+
+Store:
+
+* ranges
+* author metadata
+* timestamps
+
+---
+
+# Q13. How do you handle huge documents?
+
+* chunking
+* lazy loading
+* partial synchronization
+* virtual rendering
+
+Avoid loading entire document into memory.
+
+---
+
+# Q14. How do you prevent malicious edits/spam?
+
+* rate limiting
+* auth validation
+* permission checks
+* anomaly detection
+
+---
+
+# Q15. What metrics would you monitor?
+
+Critical metrics:
+
+* edit latency
+* synchronization delay
+* WebSocket disconnect rate
+* operation queue lag
+* failed transformations
+* document load latency
+* active collaborators per doc
+
+---
+
+# What Makes This an SDE-2 Level Answer
+
+An SDE-2 answer should demonstrate:
+
+* Understanding of distributed systems
+* Real-time communication
+* Conflict resolution
+* Scalability tradeoffs
+* Reliability
+* Practical engineering compromises
+
+The biggest differentiator:
+Most candidates stop at CRUD + WebSockets.
+
+Strong candidates deeply explain:
+
+* OT/CRDT
+* synchronization guarantees
+* operation logs
+* scaling collaboration infrastructure
+* consistency tradeoffs
